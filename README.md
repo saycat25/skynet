@@ -1,234 +1,227 @@
-# JavaScript ObjectSchema Package
+# @jridgewell/gen-mapping
 
-by [Nicholas C. Zakas](https://humanwhocodes.com)
+> Generate source maps
 
-If you find this useful, please consider supporting my work with a [donation](https://humanwhocodes.com/donate).
+`gen-mapping` allows you to generate a source map during transpilation or minification.
+With a source map, you're able to trace the original location in the source file, either in Chrome's
+DevTools or using a library like [`@jridgewell/trace-mapping`][trace-mapping].
 
-## Overview
-
-A JavaScript object merge/validation utility where you can define a different merge and validation strategy for each key. This is helpful when you need to validate complex data structures and then merge them in a way that is more complex than `Object.assign()`.
+You may already be familiar with the [`source-map`][source-map] package's `SourceMapGenerator`. This
+provides the same `addMapping` and `setSourceContent` API.
 
 ## Installation
 
-You can install using either npm:
-
-```
-npm install @humanwhocodes/object-schema
-```
-
-Or Yarn:
-
-```
-yarn add @humanwhocodes/object-schema
+```sh
+npm install @jridgewell/gen-mapping
 ```
 
 ## Usage
 
-Use CommonJS to get access to the `ObjectSchema` constructor:
+```typescript
+import { GenMapping, addMapping, setSourceContent, toEncodedMap, toDecodedMap } from '@jridgewell/gen-mapping';
 
-```js
-const { ObjectSchema } = require("@humanwhocodes/object-schema");
-
-const schema = new ObjectSchema({
-
-    // define a definition for the "downloads" key
-    downloads: {
-        required: true,
-        merge(value1, value2) {
-            return value1 + value2;
-        },
-        validate(value) {
-            if (typeof value !== "number") {
-                throw new Error("Expected downloads to be a number.");
-            }
-        }
-    },
-
-    // define a strategy for the "versions" key
-    version: {
-        required: true,
-        merge(value1, value2) {
-            return value1.concat(value2);
-        },
-        validate(value) {
-            if (!Array.isArray(value)) {
-                throw new Error("Expected versions to be an array.");
-            }
-        }
-    }
+const map = new GenMapping({
+  file: 'output.js',
+  sourceRoot: 'https://example.com/',
 });
 
-const record1 = {
-    downloads: 25,
-    versions: [
-        "v1.0.0",
-        "v1.1.0",
-        "v1.2.0"
-    ]
-};
+setSourceContent(map, 'input.js', `function foo() {}`);
 
-const record2 = {
-    downloads: 125,
-    versions: [
-        "v2.0.0",
-        "v2.1.0",
-        "v3.0.0"
-    ]
-};
+addMapping(map, {
+  // Lines start at line 1, columns at column 0.
+  generated: { line: 1, column: 0 },
+  source: 'input.js',
+  original: { line: 1, column: 0 },
+});
 
-// make sure the records are valid
-schema.validate(record1);
-schema.validate(record2);
+addMapping(map, {
+  generated: { line: 1, column: 9 },
+  source: 'input.js',
+  original: { line: 1, column: 9 },
+  name: 'foo',
+});
 
-// merge together (schema.merge() accepts any number of objects)
-const result = schema.merge(record1, record2);
+assert.deepEqual(toDecodedMap(map), {
+  version: 3,
+  file: 'output.js',
+  names: ['foo'],
+  sourceRoot: 'https://example.com/',
+  sources: ['input.js'],
+  sourcesContent: ['function foo() {}'],
+  mappings: [
+    [ [0, 0, 0, 0], [9, 0, 0, 9, 0] ]
+  ],
+});
 
-// result looks like this:
-
-const result = {
-    downloads: 75,
-    versions: [
-        "v1.0.0",
-        "v1.1.0",
-        "v1.2.0",
-        "v2.0.0",
-        "v2.1.0",
-        "v3.0.0"
-    ]
-};
-```
-
-## Tips and Tricks
-
-### Named merge strategies
-
-Instead of specifying a `merge()` method, you can specify one of the following strings to use a default merge strategy:
-
-* `"assign"` - use `Object.assign()` to merge the two values into one object.
-* `"overwrite"` - the second value always replaces the first.
-* `"replace"` - the second value replaces the first if the second is not `undefined`.
-
-For example:
-
-```js
-const schema = new ObjectSchema({
-    name: {
-        merge: "replace",
-        validate() {}
-    }
+assert.deepEqual(toEncodedMap(map), {
+  version: 3,
+  file: 'output.js',
+  names: ['foo'],
+  sourceRoot: 'https://example.com/',
+  sources: ['input.js'],
+  sourcesContent: ['function foo() {}'],
+  mappings: 'AAAA,SAASA',
 });
 ```
 
-### Named validation strategies
+### Smaller Sourcemaps
 
-Instead of specifying a `validate()` method, you can specify one of the following strings to use a default validation strategy:
+Not everything needs to be added to a sourcemap, and needless markings can cause signficantly
+larger file sizes. `gen-mapping` exposes `maybeAddSegment`/`maybeAddMapping` APIs that will
+intelligently determine if this marking adds useful information. If not, the marking will be
+skipped.
 
-* `"array"` - value must be an array.
-* `"boolean"` - value must be a boolean.
-* `"number"` - value must be a number.
-* `"object"` - value must be an object.
-* `"object?"` - value must be an object or null.
-* `"string"` - value must be a string.
-* `"string!"` - value must be a non-empty string.
+```typescript
+import { maybeAddMapping } from '@jridgewell/gen-mapping';
 
-For example:
+const map = new GenMapping();
 
-```js
-const schema = new ObjectSchema({
-    name: {
-        merge: "replace",
-        validate: "string"
-    }
+// Adding a sourceless marking at the beginning of a line isn't useful.
+maybeAddMapping(map, {
+  generated: { line: 1, column: 0 },
+});
+
+// Adding a new source marking is useful.
+maybeAddMapping(map, {
+  generated: { line: 1, column: 0 },
+  source: 'input.js',
+  original: { line: 1, column: 0 },
+});
+
+// But adding another marking pointing to the exact same original location isn't, even if the
+// generated column changed.
+maybeAddMapping(map, {
+  generated: { line: 1, column: 9 },
+  source: 'input.js',
+  original: { line: 1, column: 0 },
+});
+
+assert.deepEqual(toEncodedMap(map), {
+  version: 3,
+  names: [],
+  sources: ['input.js'],
+  sourcesContent: [null],
+  mappings: 'AAAA',
 });
 ```
 
-### Subschemas
+## Benchmarks
 
-If you are defining a key that is, itself, an object, you can simplify the process by using a subschema. Instead of defining `merge()` and `validate()`, assign a `schema` key that contains a schema definition, like this:
+```
+node v18.0.0
 
-```js
-const schema = new ObjectSchema({
-    name: {
-        schema: {
-            first: {
-                merge: "replace",
-                validate: "string"
-            },
-            last: {
-                merge: "replace",
-                validate: "string"
-            }
-        }
-    }
-});
+amp.js.map
+Memory Usage:
+gen-mapping: addSegment      5852872 bytes
+gen-mapping: addMapping      7716042 bytes
+source-map-js                6143250 bytes
+source-map-0.6.1             6124102 bytes
+source-map-0.8.0             6121173 bytes
+Smallest memory usage is gen-mapping: addSegment
 
-schema.validate({
-    name: {
-        first: "n",
-        last: "z"
-    }
-});
+Adding speed:
+gen-mapping:      addSegment x 441 ops/sec ±2.07% (90 runs sampled)
+gen-mapping:      addMapping x 350 ops/sec ±2.40% (86 runs sampled)
+source-map-js:    addMapping x 169 ops/sec ±2.42% (80 runs sampled)
+source-map-0.6.1: addMapping x 167 ops/sec ±2.56% (80 runs sampled)
+source-map-0.8.0: addMapping x 168 ops/sec ±2.52% (80 runs sampled)
+Fastest is gen-mapping:      addSegment
+
+Generate speed:
+gen-mapping:      decoded output x 150,824,370 ops/sec ±0.07% (102 runs sampled)
+gen-mapping:      encoded output x 663 ops/sec ±0.22% (98 runs sampled)
+source-map-js:    encoded output x 197 ops/sec ±0.45% (84 runs sampled)
+source-map-0.6.1: encoded output x 198 ops/sec ±0.33% (85 runs sampled)
+source-map-0.8.0: encoded output x 197 ops/sec ±0.06% (93 runs sampled)
+Fastest is gen-mapping:      decoded output
+
+
+***
+
+
+babel.min.js.map
+Memory Usage:
+gen-mapping: addSegment     37578063 bytes
+gen-mapping: addMapping     37212897 bytes
+source-map-js               47638527 bytes
+source-map-0.6.1            47690503 bytes
+source-map-0.8.0            47470188 bytes
+Smallest memory usage is gen-mapping: addMapping
+
+Adding speed:
+gen-mapping:      addSegment x 31.05 ops/sec ±8.31% (43 runs sampled)
+gen-mapping:      addMapping x 29.83 ops/sec ±7.36% (51 runs sampled)
+source-map-js:    addMapping x 20.73 ops/sec ±6.22% (38 runs sampled)
+source-map-0.6.1: addMapping x 20.03 ops/sec ±10.51% (38 runs sampled)
+source-map-0.8.0: addMapping x 19.30 ops/sec ±8.27% (37 runs sampled)
+Fastest is gen-mapping:      addSegment
+
+Generate speed:
+gen-mapping:      decoded output x 381,379,234 ops/sec ±0.29% (96 runs sampled)
+gen-mapping:      encoded output x 95.15 ops/sec ±2.98% (72 runs sampled)
+source-map-js:    encoded output x 15.20 ops/sec ±7.41% (33 runs sampled)
+source-map-0.6.1: encoded output x 16.36 ops/sec ±10.46% (31 runs sampled)
+source-map-0.8.0: encoded output x 16.06 ops/sec ±6.45% (31 runs sampled)
+Fastest is gen-mapping:      decoded output
+
+
+***
+
+
+preact.js.map
+Memory Usage:
+gen-mapping: addSegment       416247 bytes
+gen-mapping: addMapping       419824 bytes
+source-map-js                1024619 bytes
+source-map-0.6.1             1146004 bytes
+source-map-0.8.0             1113250 bytes
+Smallest memory usage is gen-mapping: addSegment
+
+Adding speed:
+gen-mapping:      addSegment x 13,755 ops/sec ±0.15% (98 runs sampled)
+gen-mapping:      addMapping x 13,013 ops/sec ±0.11% (101 runs sampled)
+source-map-js:    addMapping x 4,564 ops/sec ±0.21% (98 runs sampled)
+source-map-0.6.1: addMapping x 4,562 ops/sec ±0.11% (99 runs sampled)
+source-map-0.8.0: addMapping x 4,593 ops/sec ±0.11% (100 runs sampled)
+Fastest is gen-mapping:      addSegment
+
+Generate speed:
+gen-mapping:      decoded output x 379,864,020 ops/sec ±0.23% (93 runs sampled)
+gen-mapping:      encoded output x 14,368 ops/sec ±4.07% (82 runs sampled)
+source-map-js:    encoded output x 5,261 ops/sec ±0.21% (99 runs sampled)
+source-map-0.6.1: encoded output x 5,124 ops/sec ±0.58% (99 runs sampled)
+source-map-0.8.0: encoded output x 5,434 ops/sec ±0.33% (96 runs sampled)
+Fastest is gen-mapping:      decoded output
+
+
+***
+
+
+react.js.map
+Memory Usage:
+gen-mapping: addSegment       975096 bytes
+gen-mapping: addMapping      1102981 bytes
+source-map-js                2918836 bytes
+source-map-0.6.1             2885435 bytes
+source-map-0.8.0             2874336 bytes
+Smallest memory usage is gen-mapping: addSegment
+
+Adding speed:
+gen-mapping:      addSegment x 4,772 ops/sec ±0.15% (100 runs sampled)
+gen-mapping:      addMapping x 4,456 ops/sec ±0.13% (97 runs sampled)
+source-map-js:    addMapping x 1,618 ops/sec ±0.24% (97 runs sampled)
+source-map-0.6.1: addMapping x 1,622 ops/sec ±0.12% (99 runs sampled)
+source-map-0.8.0: addMapping x 1,631 ops/sec ±0.12% (100 runs sampled)
+Fastest is gen-mapping:      addSegment
+
+Generate speed:
+gen-mapping:      decoded output x 379,107,695 ops/sec ±0.07% (99 runs sampled)
+gen-mapping:      encoded output x 5,421 ops/sec ±1.60% (89 runs sampled)
+source-map-js:    encoded output x 2,113 ops/sec ±1.81% (98 runs sampled)
+source-map-0.6.1: encoded output x 2,126 ops/sec ±0.10% (100 runs sampled)
+source-map-0.8.0: encoded output x 2,176 ops/sec ±0.39% (98 runs sampled)
+Fastest is gen-mapping:      decoded output
 ```
 
-### Remove Keys During Merge
-
-If the merge strategy for a key returns `undefined`, then the key will not appear in the final object. For example:
-
-```js
-const schema = new ObjectSchema({
-    date: {
-        merge() {
-            return undefined;
-        },
-        validate(value) {
-            Date.parse(value);  // throws an error when invalid
-        }
-    }
-});
-
-const object1 = { date: "5/5/2005" };
-const object2 = { date: "6/6/2006" };
-
-const result = schema.merge(object1, object2);
-
-console.log("date" in result);  // false
-```
-
-### Requiring Another Key Be Present
-
-If you'd like the presence of one key to require the presence of another key, you can use the `requires` property to specify an array of other properties that any key requires. For example:
-
-```js
-const schema = new ObjectSchema();
-
-const schema = new ObjectSchema({
-    date: {
-        merge() {
-            return undefined;
-        },
-        validate(value) {
-            Date.parse(value);  // throws an error when invalid
-        }
-    },
-    time: {
-        requires: ["date"],
-        merge(first, second) {
-            return second;
-        },
-        validate(value) {
-            // ...
-        }
-    }
-});
-
-// throws error: Key "time" requires keys "date"
-schema.validate({
-    time: "13:45"
-});
-```
-
-In this example, even though `date` is an optional key, it is required to be present whenever `time` is present.
-
-## License
-
-BSD 3-Clause
+[source-map]: https://www.npmjs.com/package/source-map
+[trace-mapping]: https://github.com/jridgewell/sourcemaps/tree/main/packages/trace-mapping
